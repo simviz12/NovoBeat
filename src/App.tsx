@@ -151,41 +151,41 @@ function App() {
       try { 
         await audioRef.current.play(); 
         setIsPlaying(true); 
-        initAudioContext();
+        initializeAudioContext();
       } catch(e) { setIsPlaying(false); }
     }
   };
 
-  const initAudioContext = () => {
+  const initializeAudioContext = () => {
     if (analyserRef.current || !audioRef.current) return;
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioCtx();
-      const src = ctx.createMediaElementSource(audioRef.current);
-      const ana = ctx.createAnalyser();
-      ana.fftSize = 256;
-      src.connect(ana);
-      ana.connect(ctx.destination);
-      analyserRef.current = ana;
-      animateBeat();
+      const context = new AudioCtx();
+      const source = context.createMediaElementSource(audioRef.current);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyser.connect(context.destination);
+      analyserRef.current = analyser;
+      startBeatAnimation();
     } catch (e) { console.error("Web Audio fail:", e); }
   };
 
-  const animateBeat = () => {
+  const startBeatAnimation = () => {
     if (!analyserRef.current) return;
-    const data = new Uint8Array(analyserRef.current.frequencyBinCount);
-    const render = () => {
+    const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount);
+    const renderFrame = () => {
       if (!analyserRef.current) return;
-      analyserRef.current.getByteFrequencyData(data);
-      // Analizar bajos (primeras frecuencias)
-      const bass = data.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
-      const scale = 1 + (bass / 255) * 0.15;
-      const glow = (bass / 255) * 40;
-      document.documentElement.style.setProperty('--beat-scale', scale.toString());
-      document.documentElement.style.setProperty('--beat-glow', `${glow}px`);
-      requestAnimationFrame(render);
+      analyserRef.current.getByteFrequencyData(frequencyData);
+      // Analyze bass frequencies
+      const bassIntensity = frequencyData.slice(0, 5).reduce((acc, val) => acc + val, 0) / 5;
+      const scaleFactor = 1 + (bassIntensity / 255) * 0.15;
+      const glowIntensity = (bassIntensity / 255) * 40;
+      document.documentElement.style.setProperty('--beat-scale', scaleFactor.toString());
+      document.documentElement.style.setProperty('--beat-glow', `${glowIntensity}px`);
+      requestAnimationFrame(renderFrame);
     };
-    render();
+    renderFrame();
   };
 
   const handleNext = () => {
@@ -202,10 +202,10 @@ function App() {
     if(currentNodeRef.current.prev) playSong(currentNodeRef.current.prev.data);
   };
 
-  const toggleFav = (e: React.MouseEvent, song: Song) => {
-    e.stopPropagation();
-    const up = songs.map(s => s.id === song.id ? {...s, isFavorite: !s.isFavorite} : s);
-    setSongs(up);
+  const toggleFavorite = (event: React.MouseEvent, song: Song) => {
+    event.stopPropagation();
+    const updatedSongs = songs.map(s => s.id === song.id ? {...s, isFavorite: !s.isFavorite} : s);
+    setSongs(updatedSongs);
     if(currentSong?.id === song.id) setCurrentSong({...currentSong, isFavorite: !currentSong.isFavorite});
   };
 
@@ -223,13 +223,13 @@ function App() {
   };
 
   const addSongToPlaylist = (plId: string, songId: string) => {
-    const updated = playlists.map(pl => {
+    const updatedPlaylists = playlists.map(pl => {
       if(pl.id === plId && !pl.songIds.includes(songId)) {
         return { ...pl, songIds: [...pl.songIds, songId] };
       }
       return pl;
     });
-    setPlaylists(updated);
+    setPlaylists(updatedPlaylists);
     setTargetSong(null);
     setShowPlModal(false);
     alert("¡Canción añadida!");
@@ -329,7 +329,7 @@ function App() {
                   <div key={s.id} className="card-elite" onClick={()=>playSong(s)}>
                     <div className="card-art">
                       {s.coverArt ? <img src={getCoverUrl(s.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1}}><Music size={60}/></div>}
-                      <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(e)=>toggleFav(e, s)}>
+                      <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(event)=>toggleFavorite(event, s)}>
                         <Heart size={20} fill={s.isFavorite?'currentColor':'none'}/>
                       </button>
                       <button className="btn-p" style={{ position:'absolute', top:10, left:40, color: 'white', opacity:0.8 }} onClick={(e)=>{e.stopPropagation(); setTargetSong(s); setShowPlModal(true);}}>
@@ -354,8 +354,8 @@ function App() {
                 <div style={{ width:120, height:120, background:'var(--primary-glow)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', color:'rgb(var(--primary))' }}><UploadCloud size={60}/></div>
                 <h2 style={{fontSize:'2.5rem', fontWeight:900}}>Importar Música</h2>
                 <p style={{color:'var(--text-muted)'}}>Sube tus archivos MP3 para empezar la experiencia Elite.</p>
-                <button style={{ background:'rgb(var(--primary))', color:'white', border:'none', padding:'15px 40px', borderRadius: 12, fontWeight:700, cursor:'pointer' }} onClick={()=>document.getElementById('fup')?.click()}>Seleccionar Archivos</button>
-                <input type="file" id="fup" multiple accept="audio/*" style={{display:'none'}} onChange={handleImport}/>
+                <button style={{ background:'rgb(var(--primary))', color:'white', border:'none', padding:'15px 40px', borderRadius: 12, fontWeight:700, cursor:'pointer' }} onClick={()=>document.getElementById('file-upload-input')?.click()}>Seleccionar Archivos</button>
+                <input type="file" id="file-upload-input" multiple accept="audio/*" style={{display:'none'}} onChange={handleImport}/>
               </div>
             </div>
           )}
@@ -427,7 +427,7 @@ function App() {
                   <div key={s.id} className="card-elite" onClick={()=>playSong(s)}>
                     <div className="card-art">
                       {s.coverArt ? <img src={getCoverUrl(s.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1}}><Music size={60}/></div>}
-                      <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(e)=>toggleFav(e, s)}>
+                      <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(event)=>toggleFavorite(event, s)}>
                         <Heart size={20} fill={s.isFavorite?'currentColor':'none'}/>
                       </button>
                       <button className="btn-p" style={{ position:'absolute', top:10, left:40, color: 'white', opacity:0.8 }} onClick={(e)=>{e.stopPropagation(); setTargetSong(s); setShowPlModal(true);}}>
@@ -471,18 +471,18 @@ function App() {
       )}
 
       <footer className="footer-master">
-        <div className="np-box">
-          <div className="np-img">
+        <div className="now-playing-box">
+          <div className="now-playing-img">
             {currentSong?.coverArt ? <img src={getCoverUrl(currentSong.coverArt)} className={isPlaying?'spinning':''} alt=""/> : <Music size={24}/>}
           </div>
-          <div className="np-info">
+          <div className="now-playing-info">
             <strong>{currentSong?.name || "Selecciona una pista"}</strong>
             <span style={{fontSize:'0.85rem', opacity:0.6}}>{currentSong?.artist || "Symphony Elite"}</span>
           </div>
         </div>
 
         <div className="player-core">
-          <div className="ctrl-row">
+          <div className="control-row">
             <Shuffle size={18} className={`btn-p ${isShuffle?'active':''}`} onClick={()=>setIsShuffle(!isShuffle)}/>
             <SkipBack size={24} className="btn-p" onClick={handlePrev}/>
             <div className="btn-p play-main" onClick={()=>{ if(audioRef.current?.paused) audioRef.current.play(); else audioRef.current?.pause(); setIsPlaying(!audioRef.current?.paused); }}>
@@ -491,20 +491,20 @@ function App() {
             <button className="btn-p" style={{background:'none', border:'none'}} onClick={handleNext}><SkipForward size={24}/></button>
             <Repeat size={18} className={`btn-p ${isRepeat?'active':''}`} onClick={()=>setIsRepeat(!isRepeat)}/>
           </div>
-          <div className="seek-wrap">
+          <div className="seek-wrapper">
             <span>{formatTime(currentTime)}</span>
-            <div className="bar-total" onClick={e => { if(!audioRef.current) return; const r=e.currentTarget.getBoundingClientRect(); audioRef.current.currentTime = ((e.clientX-r.left)/r.width)*duration; }}>
-              <div className="bar-fill" style={{ width: `${(currentTime/duration)*100 || 0}%` }}></div>
+            <div className="progress-bar-total" onClick={e => { if(!audioRef.current) return; const r=e.currentTarget.getBoundingClientRect(); audioRef.current.currentTime = ((e.clientX-r.left)/r.width)*duration; }}>
+              <div className="progress-bar-fill" style={{ width: `${(currentTime/duration)*100 || 0}%` }}></div>
             </div>
             <span>{formatTime(duration)}</span>
           </div>
         </div>
 
-        <div className="actions-box">
+        <div className="actions-container">
           <Maximize2 className="btn-p" size={18} onClick={()=>setShowRightPanel(p=>!p)}/>
           <div style={{display:'flex', alignItems:'center', gap:10}}>
             <Volume2 size={20} opacity={0.5}/>
-            <input type="range" min="0" max="1" step="0.01" value={volume} onChange={e => {setVolume(parseFloat(e.target.value)); if(audioRef.current) audioRef.current.volume=parseFloat(e.target.value);}} className="vol-control"/>
+            <input type="range" min="0" max="1" step="0.01" value={volume} onChange={e => {setVolume(parseFloat(e.target.value)); if(audioRef.current) audioRef.current.volume=parseFloat(e.target.value);}} className="volume-control"/>
           </div>
         </div>
       </footer>
