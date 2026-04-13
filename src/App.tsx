@@ -53,6 +53,7 @@ function App() {
   const [targetSong, setTargetSong] = useState<Song | null>(null);
   const [newPlName, setNewPlName] = useState('');
   const [activePlId, setActivePlId] = useState<string | null>(null);
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
 
   // Refs
   const listRef = useRef<DoublyLinkedList<Song>>(new DoublyLinkedList<Song>());
@@ -265,6 +266,44 @@ function App() {
     }
   };
 
+  const handleDragStart = (idx: number) => {
+    setDraggedIdx(idx);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault(); // Required to allow drop
+  };
+
+  const handleDrop = (targetIdx: number) => {
+    if (draggedIdx === null || draggedIdx === targetIdx) return;
+    
+    // 1. Get the song from DLL
+    const songToMove = listRef.current.removeAt(draggedIdx);
+    if (songToMove) {
+      // 2. Insert at new position
+      listRef.current.insertAt(songToMove, targetIdx);
+      
+      // 3. Sync everything
+      const updatedArr = listRef.current.toArray();
+      setSongs(updatedArr);
+      
+      // 4. Update DLL nodes references for player
+      const dll = new DoublyLinkedList<Song>();
+      updatedArr.forEach(s => dll.append(s));
+      listRef.current = dll;
+      
+      // Find current node in new list
+      if (currentSong) {
+        let node = listRef.current.head;
+        while(node) {
+          if(node.data.id === currentSong.id) { currentNodeRef.current = node; break; }
+          node = node.next;
+        }
+      }
+    }
+    setDraggedIdx(null);
+  };
+
   const filtered = (() => {
     let base = songs;
     if (activePlId) {
@@ -325,8 +364,8 @@ function App() {
             <>
               <h1 className="title-xl">{favoritesOnly ? 'Tus Canciones Favoritas' : 'Tu Colección'}</h1>
               <div className="grid-layout">
-                {filtered.map(s => (
-                  <div key={s.id} className="card-elite" onClick={()=>playSong(s)}>
+                {filtered.map((s, idx) => (
+                  <div key={s.id} className={`card-elite ${draggedIdx === idx ? 'dragging' : ''}`} draggable onDragStart={() => handleDragStart(idx)} onDragOver={handleDragOver} onDrop={() => handleDrop(idx)} onClick={()=>playSong(s)}>
                     <div className="card-art">
                       {s.coverArt ? <img src={getCoverUrl(s.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1}}><Music size={60}/></div>}
                       <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(event)=>toggleFavorite(event, s)}>
@@ -423,8 +462,8 @@ function App() {
                 {activePlId ? 'Canciones en esta lista' : 'Todas las pistas'}
               </h2>
               <div className="grid-layout">
-                {filtered.map(s => (
-                  <div key={s.id} className="card-elite" onClick={()=>playSong(s)}>
+                {filtered.map((s, idx) => (
+                  <div key={s.id} className={`card-elite ${draggedIdx === idx ? 'dragging' : ''}`} draggable onDragStart={() => handleDragStart(idx)} onDragOver={handleDragOver} onDrop={() => handleDrop(idx)} onClick={()=>playSong(s)}>
                     <div className="card-art">
                       {s.coverArt ? <img src={getCoverUrl(s.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1}}><Music size={60}/></div>}
                       <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(event)=>toggleFavorite(event, s)}>
