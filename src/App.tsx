@@ -1,832 +1,539 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
-  Play, Pause, SkipForward, SkipBack, Trash2, 
-  Volume2, VolumeX, Repeat, Repeat1, Search, Gauge, Disc, Network, Plus, Radio, ArrowRightLeft, Sun, Moon, Waves, Rocket, BookOpen
+  Play, Pause, SkipForward, SkipBack, 
+  Volume2, Search, Disc, Radio, Sun, Moon, 
+  Heart, UploadCloud, Home, Library, Plus, 
+  FolderPlus, X, Shuffle, Repeat, Maximize2, 
+  Music, Trash2, ListPlus, CheckCircle
 } from 'lucide-react';
 import { DoublyLinkedList, type Song, Node as DLLNode } from './structures/DoublyLinkedList';
-import { FastAverageColor } from 'fast-average-color';
-// @ts-ignore
-import jsmediatags from 'jsmediatags/dist/jsmediatags.min.js';
 import { get, set } from 'idb-keyval';
+import { FastAverageColor } from 'fast-average-color';
+import * as mm from 'music-metadata-browser';
 import './App.css';
 
 const fac = new FastAverageColor();
 
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  life: number;
-}
+// Helpers
+const formatTime = (s: number) => {
+  if (isNaN(s) || s === Infinity) return "0:00";
+  const m = Math.floor(s / 60);
+  const sc = Math.floor(s % 60);
+  return `${m}:${sc.toString().padStart(2, '0')}`;
+};
+
+const getCoverUrl = (cover: any): string => {
+  if (!cover) return '';
+  if (typeof cover === 'string') return cover;
+  if (cover instanceof Blob) return URL.createObjectURL(cover);
+  return '';
+};
 
 function App() {
+  // UI State
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [playlistArray, setPlaylistArray] = useState<Song[]>([]);
+  const [view, setView] = useState<'home' | 'import' | 'library'>('home');
+  const [showRightPanel, setShowRightPanel] = useState(true);
+  const [showMsg, setShowMsg] = useState(false);
+  const [query, setQuery] = useState('');
+
+  // Music State
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [playlists, setPlaylists] = useState<any[]>([{ id: 'favs', name: 'Favoritos', songIds: [] }]);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  
+  const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  
-  const [volume, setVolume] = useState(1);
-  const [playbackRate, setPlaybackRate] = useState(1);
-  const [pannerValue, setPannerValue] = useState(0);
-  const [stadiumMode, setStadiumMode] = useState(false);
-  const [underwaterMode, setUnderwaterMode] = useState(false);
-  const [nightcoreMode, setNightcoreMode] = useState(false);
+  const [volume, setVolume] = useState(0.8);
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [isRepeat, setIsRepeat] = useState(false);
 
-  const [loopMode, setLoopMode] = useState<'none'|'one'|'all'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [insertMode, setInsertMode] = useState<'end'|'start'|'index'>('end');
-  const [insertIndex, setInsertIndex] = useState(0);
+  // Playlist Management State
+  const [showPlModal, setShowPlModal] = useState(false);
+  const [targetSong, setTargetSong] = useState<Song | null>(null);
+  const [newPlName, setNewPlName] = useState('');
+  const [activePlId, setActivePlId] = useState<string | null>(null);
 
+  // Refs
   const listRef = useRef<DoublyLinkedList<Song>>(new DoublyLinkedList<Song>());
   const currentNodeRef = useRef<DLLNode<Song> | null>(null);
-  
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  
-  const pannerNodeRef = useRef<StereoPannerNode | null>(null);
-  const echoGainRef = useRef<GainNode | null>(null);
-  const lowpassFilterRef = useRef<BiquadFilterNode | null>(null);
+  const [beat, setBeat] = useState(1);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const bgCanvasRef = useRef<HTMLCanvasElement>(null); 
-  const animationRef = useRef<number | null>(null);
-  const isDbLoadedRef = useRef(false);
-
-  const dominantRgbRef = useRef('99, 102, 241');
-  const particlesRef = useRef<Particle[]>([]);
-
-  const filteredPlaylist = useMemo(() => {
-    if (!searchQuery) return playlistArray;
-    const lowerQ = searchQuery.toLowerCase();
-    return playlistArray.filter(s => s.name.toLowerCase().includes(lowerQ) || s.artist.toLowerCase().includes(lowerQ));
-  }, [playlistArray, searchQuery]);
-
-  // INITIAL LOAD FROM BROWSER PERSISTENT DB
+  // Load Data
   useEffect(() => {
-    if (isDbLoadedRef.current) return; // Prevent StrictMode immediate double invocation
-    isDbLoadedRef.current = true; // Lock immediately synchronously
+    const init = async () => {
+      const keys = ['symphony_master_songs', 'symphony_elite_v5_songs', 'symphony_master_songs_v2'];
+      let list: any[] = [];
+      for(const k of keys) { const data = await get(k); if(data?.length) { list = data; break; } }
 
-    const loadDB = async () => {
+      if (list.length > 0) {
+        const dll = new DoublyLinkedList<Song>();
+        const hydrated = list.filter(s => s.file).map(s => {
+          const song = { ...s, objectUrl: URL.createObjectURL(s.file) };
+          dll.append(song);
+          return song;
+        });
+        listRef.current = dll;
+        setSongs(hydrated);
+        if(dll.head) {
+          currentNodeRef.current = dll.head;
+          setCurrentSong(dll.head.data);
+          updateColor(getCoverUrl(dll.head.data.coverArt));
+        }
+      }
+      const pls = await get('symphony_pls');
+      if (pls) setPlaylists(pls);
+    };
+    init();
+  }, []);
+
+  // Save Data
+  useEffect(() => {
+    set('symphony_master_songs', songs.map(({objectUrl, ...r}) => r));
+    set('symphony_pls', playlists);
+  }, [songs, playlists]);
+
+  useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
+
+  const updateColor = async (url?: string) => {
+    if(!url) { document.documentElement.style.setProperty('--theme-dominant', '99, 102, 241'); return; }
+    try {
+      const c = await fac.getColorAsync(url);
+      const [r,g,b] = c.value;
+      document.documentElement.style.setProperty('--theme-dominant', `${r},${g},${b}`);
+    } catch(e) {}
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const f of files) {
       try {
-        const saved = await get('novobeat_playlist');
-        if (saved && Array.isArray(saved) && saved.length > 0) {
-          
-          listRef.current = new DoublyLinkedList<Song>(); // Wipe any potential RAM bugs
-          const seenIds = new Set(); // Duplication defensive filter
-
-          for (const item of saved) {
-             if (!item.file) continue;
-             if (seenIds.has(item.id)) continue; // Destroy duplication anomalies from DB
-             seenIds.add(item.id);
-
-             const url = URL.createObjectURL(item.file);
-             const restoredSong: Song = {
-               id: item.id,
-               name: item.name,
-               artist: item.artist,
-               coverArt: item.coverArt,
-               file: item.file,
-               objectUrl: url,
-               playCount: item.playCount || 0,
-               addedAt: item.addedAt || Date.now(),
-               note: item.note || ''
-             };
-             // Rebuild local RAM structure from persisted storage
-             listRef.current.append(restoredSong);
-          }
-          setPlaylistArray(listRef.current.toArray());
-          if (listRef.current.head) {
-             currentNodeRef.current = listRef.current.head;
-             setCurrentSong(listRef.current.head.data);
-             updateThemeWithArt(listRef.current.head.data.coverArt);
-             if (audioRef.current) audioRef.current.src = listRef.current.head.data.objectUrl;
-          }
+        const meta = await mm.parseBlob(f);
+        let cover = null;
+        if(meta.common.picture?.[0]) {
+          const pic = meta.common.picture[0];
+          cover = new Blob([new Uint8Array(pic.data)], { type: pic.format });
         }
-      } catch (err) {
-        console.error("Fallo al recuperar IndexedDB: ", err);
-      }
-    };
-    loadDB();
-  }, []);
-
-  // AUTO-SAVE DRAG/DROP & EDITS TO PERSISTENT BROWSER DB
-  useEffect(() => {
-    if (!isDbLoadedRef.current) return;
-    const savePlaylistToDB = async () => {
-      const dataToSave = playlistArray.map(s => ({
-          id: s.id,
-          name: s.name,
-          artist: s.artist,
-          coverArt: s.coverArt,
-          file: s.file, // Core physical binary 
-          playCount: s.playCount,
-          addedAt: s.addedAt,
-          note: s.note
-      }));
-      await set('novobeat_playlist', dataToSave);
-    };
-    // Debounce or slight delay to not overload IndexedDB isn't needed for small arrays, but it executes here
-    savePlaylistToDB();
-  }, [playlistArray]);
-
-  useEffect(() => {
-    document.documentElement.style.setProperty('--theme-dominant', dominantRgbRef.current);
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
-  const initAudio = () => {
-    if (audioCtxRef.current || !audioRef.current) return;
-    const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
-    const ctx = new AudioContextClass() as AudioContext;
-    audioCtxRef.current = ctx;
-
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.85;
-    analyserRef.current = analyser;
-
-    const compressor = ctx.createDynamicsCompressor();
-    compressor.threshold.value = -24;
-    compressor.ratio.value = 12;
-
-    const source = ctx.createMediaElementSource(audioRef.current);
-
-    const panner = ctx.createStereoPanner();
-    panner.pan.value = 0;
-    pannerNodeRef.current = panner;
-
-    const lowpass = ctx.createBiquadFilter();
-    lowpass.type = "lowpass";
-    lowpass.frequency.value = 22050; 
-    lowpassFilterRef.current = lowpass;
-
-    const delay = ctx.createDelay(2.0);
-    delay.delayTime.value = 0.25; 
-    
-    const feedbackGain = ctx.createGain();
-    feedbackGain.gain.value = 0.45; 
-    
-    const echoGain = ctx.createGain(); 
-    echoGain.gain.value = 0; 
-    echoGainRef.current = echoGain;
-
-    source.connect(delay);
-    delay.connect(feedbackGain);
-    feedbackGain.connect(delay); 
-    delay.connect(echoGain);
-    
-    source.connect(panner);
-    echoGain.connect(panner);
-
-    panner.connect(lowpass);
-    lowpass.connect(compressor);
-    compressor.connect(analyser);
-    analyser.connect(ctx.destination);
-  };
-
-  const drawVisualizer = useCallback(() => {
-    if (!canvasRef.current || !bgCanvasRef.current) return;
-    
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const bgCanvas = bgCanvasRef.current;
-    const bgCtx = bgCanvas.getContext('2d');
-
-    if (!ctx || !bgCtx) return;
-
-    const draw = () => {
-      animationRef.current = requestAnimationFrame(draw);
-      
-      const bufferLength = analyserRef.current ? analyserRef.current.frequencyBinCount : 512;
-      const dataArray = new Uint8Array(bufferLength);
-      
-      if (analyserRef.current) {
-        analyserRef.current.getByteFrequencyData(dataArray);
-      }
-
-      let bassSum = 0;
-      for (let i = 0; i < 15; i++) bassSum += dataArray[i];
-      const bassAvg = bassSum / 15;
-      
-      const bassIntensity = bassAvg / 255;
-      const bumpScale = 1 + bassIntensity * 0.25;
-      const shakeX = bassAvg > 220 ? (Math.random() - 0.5) * 8 : 0;
-      const shakeY = bassAvg > 220 ? (Math.random() - 0.5) * 8 : 0;
-      
-      document.documentElement.style.setProperty('--bass-bump', String(bumpScale));
-      document.documentElement.style.setProperty('--bass-glow', String(bassIntensity * 140) + 'px');
-      document.documentElement.style.setProperty('--bass-opacity', String(bassIntensity * 0.8));
-      document.documentElement.style.setProperty('--bass-shake', `translate(${shakeX}px, ${shakeY}px)`);
-
-      const rect = canvas.getBoundingClientRect();
-      if (canvas.width !== rect.width || canvas.height !== rect.height) {
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-      }
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const width = canvas.width;
-      const height = canvas.height;
-      const centerY = height / 2;
-      
-      ctx.beginPath();
-      for (let i = 0; i < width; i++) {
-        const dataIndex = Math.floor((i / width) * (bufferLength * 0.7));
-        const v = dataArray[dataIndex] / 255;
-        const y = centerY - (v * height * 0.4);
-        if (i === 0) ctx.moveTo(i, y);
-        else ctx.lineTo(i, y);
-      }
-      for (let i = width; i >= 0; i--) {
-        const dataIndex = Math.floor((i / width) * (bufferLength * 0.7));
-        const v = dataArray[dataIndex] / 255;
-        const y = centerY + (v * height * 0.4);
-        ctx.lineTo(i, y);
-      }
-      ctx.closePath();
-      ctx.fillStyle = `var(--text-secondary)`;
-      ctx.fill();
-
-      let baseRadius = Math.min(bgCanvas.width / 2, bgCanvas.height / 2) * 0.4 + (bassAvg * 1.5);
-      const bgCX = bgCanvas.width / 2;
-      const bgCY = bgCanvas.height / 2;
-
-      const bgRect = bgCanvas.getBoundingClientRect();
-      if (bgCanvas.width !== bgRect.width || bgCanvas.height !== bgRect.height) {
-        bgCanvas.width = bgRect.width;
-        bgCanvas.height = bgRect.height;
-      }
-      bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
-      
-      bgCtx.beginPath();
-      const points = 180;
-      for (let i = 0; i <= points; i++) {
-         const dataIndex = Math.floor((i / points) * (bufferLength * 0.8)); 
-         const bump = (dataArray[dataIndex] / 255) * 120;
-         const r = baseRadius + bump;
-         const angle = (i / points) * Math.PI * 2;
-         const x = bgCX + Math.cos(angle) * r;
-         const y = bgCY + Math.sin(angle) * r;
-         
-         if (i === 0) bgCtx.moveTo(x, y);
-         else bgCtx.lineTo(x, y);
-      }
-      bgCtx.closePath();
-      
-      bgCtx.fillStyle = `rgba(${dominantRgbRef.current}, 0.25)`;
-      bgCtx.fill();
-      bgCtx.lineWidth = 6;
-      bgCtx.strokeStyle = `rgba(${dominantRgbRef.current}, 0.6)`;
-      bgCtx.stroke();
-
-      if (bassAvg > 215) {
-        for (let i = 0; i < 2; i++) {
-          const angle = Math.random() * Math.PI * 2;
-          const speed = 2 + Math.random() * 8;
-          particlesRef.current.push({
-            x: bgCX + Math.cos(angle) * baseRadius,
-            y: bgCY + Math.sin(angle) * baseRadius,
-            vx: Math.cos(angle) * speed,
-            vy: Math.sin(angle) * speed,
-            size: 3 + Math.random() * 6,
-            life: 1.0
-          });
-        }
-      }
-
-      bgCtx.fillStyle = `rgb(${dominantRgbRef.current})`;
-      bgCtx.shadowBlur = 10;
-      bgCtx.shadowColor = `rgb(${dominantRgbRef.current})`;
-      
-      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-        const p = particlesRef.current[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.life -= 0.015; 
-
-        if (p.life <= 0) {
-          particlesRef.current.splice(i, 1);
-        } else {
-          bgCtx.beginPath();
-          bgCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-          bgCtx.globalAlpha = p.life;
-          bgCtx.fill();
-        }
-      }
-      bgCtx.globalAlpha = 1.0; 
-      bgCtx.shadowBlur = 0; 
-    };
-    draw();
-  }, []);
-
-  useEffect(() => {
-    drawVisualizer();
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [drawVisualizer]);
-
-  useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.volume = volume;
-  }, [volume]);
-
-  useEffect(() => {
-    if (pannerNodeRef.current) pannerNodeRef.current.pan.value = pannerValue;
-  }, [pannerValue]);
-
-  useEffect(() => {
-    if (echoGainRef.current) echoGainRef.current.gain.value = stadiumMode ? 0.6 : 0;
-  }, [stadiumMode]);
-
-  useEffect(() => {
-    if (lowpassFilterRef.current) {
-        lowpassFilterRef.current.frequency.value = underwaterMode ? 400 : 22050;
-    }
-  }, [underwaterMode]);
-
-  useEffect(() => {
-    if (!audioRef.current) return;
-    if (nightcoreMode) {
-      audioRef.current.playbackRate = 1.35;
-      (audioRef.current as any).preservesPitch = false; 
-    } else {
-      audioRef.current.playbackRate = playbackRate;
-      (audioRef.current as any).preservesPitch = true;
-    }
-  }, [playbackRate, nightcoreMode]);
-
-  const extractID3Tags = (file: File): Promise<{name: string, artist: string, coverUrl: string | null}> => {
-    return new Promise((resolve) => {
-      jsmediatags.read(file, {
-        onSuccess: function(tag: any) {
-          let coverUrl = null;
-          const picture = tag.tags.picture;
-          if (picture) {
-            let base64String = "";
-            for (let i = 0; i < picture.data.length; i++) {
-              base64String += String.fromCharCode(picture.data[i]);
-            }
-            coverUrl = "data:" + picture.format + ";base64," + window.btoa(base64String);
-          }
-          resolve({
-            name: tag.tags.title || file.name.replace(/\.[^/.]+$/, ""),
-            artist: tag.tags.artist || "Artista Desconocido",
-            coverUrl
-          });
-        },
-        onError: function() {
-          resolve({
-            name: file.name.replace(/\.[^/.]+$/, ""),
-            artist: "Artista Desconocido",
-            coverUrl: null
-          });
-        }
-      });
-    });
-  };
-
-  const processFiles = async (files: FileList | File[]) => {
-    let added = false;
-    let localIdx = insertIndex;
-    for (const file of Array.from(files)) {
-      if (file.type.startsWith('audio/')) {
-        const url = URL.createObjectURL(file);
-        const metadata = await extractID3Tags(file);
-
-        const newSong: Song = {
-          id: Math.random().toString(36).substr(2, 9),
-          name: metadata.name,
-          artist: metadata.artist,
-          coverArt: metadata.coverUrl,
-          file: file,
-          objectUrl: url,
-          playCount: 0,
-          addedAt: Date.now(),
-          note: '' 
+        const song: Song = {
+          id: Math.random().toString(36).substring(2, 9),
+          name: meta.common.title || f.name.replace(/\.[^/.]+$/, ""),
+          artist: meta.common.artist || "Artista Desconocido",
+          coverArt: cover, file: f, objectUrl: URL.createObjectURL(f),
+          playCount: 0, addedAt: Date.now(), isFavorite: false
         };
-        
-        if (insertMode === 'end') {
-          listRef.current.append(newSong);
-        } else if (insertMode === 'start') {
-          listRef.current.prepend(newSong);
-        } else {
-          listRef.current.insertAt(newSong, localIdx);
-          localIdx++;
-        }
-        
-        added = true;
-        
-        if (!currentNodeRef.current) {
-          currentNodeRef.current = listRef.current.head;
-          setCurrentSong(newSong);
-          updateThemeWithArt(newSong.coverArt);
-          if (audioRef.current) audioRef.current.src = url;
-        }
+        listRef.current.append(song);
+      } catch (err) {
+        console.error("Error importando archivo:", f.name, err);
       }
     }
-    if (added) setPlaylistArray(listRef.current.toArray());
+    const arr = listRef.current.toArray();
+    setSongs(arr);
+    if(!currentNodeRef.current && arr.length > 0) {
+      currentNodeRef.current = listRef.current.head;
+      setCurrentSong(arr[0]);
+    }
+    setView('home');
+    alert(`Se han importado ${files.length} archivos con éxito.`);
   };
 
-  const updateThemeWithArt = async (coverArtUrl?: string | null) => {
-    if (!coverArtUrl) {
-      dominantRgbRef.current = '99, 102, 241';
-      document.documentElement.style.setProperty('--theme-dominant', `99, 102, 241`);
-      document.documentElement.style.setProperty('--theme-accent', `0, 243, 255`);
-      return;
-    }
-    try {
-      const colorInfo = await fac.getColorAsync(coverArtUrl);
-      const [r, g, b] = colorInfo.value;
-      dominantRgbRef.current = `${r}, ${g}, ${b}`;
-      document.documentElement.style.setProperty('--theme-dominant', `${r}, ${g}, ${b}`);
-      document.documentElement.style.setProperty('--theme-accent', `${255-r}, ${255-g}, ${255-b}`);
-    } catch (e) {
-      dominantRgbRef.current = '99, 102, 241';
-      document.documentElement.style.setProperty('--theme-dominant', `99, 102, 241`);
-    }
-  };
-
-  const playSong = async () => {
-    if (!currentSong || !audioRef.current) return;
-    initAudio();
-    if (audioCtxRef.current?.state === 'suspended') {
-      await audioCtxRef.current.resume();
-    }
-    
-    if (currentNodeRef.current) {
-        currentNodeRef.current.data.playCount += 1;
-        setPlaylistArray(listRef.current.toArray()); 
-    }
-
-    try {
-      await audioRef.current.play();
-      setIsPlaying(true);
-    } catch(e) {
-      console.error("Audio block:", e);
-    }
-  };
-
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      playSong();
-    }
-  };
-
-  const playNext = () => {
-    if (loopMode === 'one' && currentSong) {
-      if (audioRef.current) audioRef.current.currentTime = 0;
-      playSong();
-      return;
-    }
-
-    if (currentNodeRef.current && currentNodeRef.current.next) {
-      currentNodeRef.current = currentNodeRef.current.next;
-    } else if (loopMode === 'all' && listRef.current.head) {
-      currentNodeRef.current = listRef.current.head; 
-    } else return;
-
-    const song = currentNodeRef.current!.data;
+  const playSong = async (song: Song) => {
+    updateColor(getCoverUrl(song.coverArt));
     setCurrentSong(song);
-    updateThemeWithArt(song.coverArt);
-    if (audioRef.current) audioRef.current.src = song.objectUrl;
-    playSong();
-  };
-
-  const playPrev = () => {
-    if (currentTime > 3) {
-      if (audioRef.current) audioRef.current.currentTime = 0;
-      return;
+    let node = listRef.current.head;
+    while(node) {
+      if(node.data.id === song.id) { currentNodeRef.current = node; break; }
+      node = node.next;
     }
-    if (currentNodeRef.current && currentNodeRef.current.prev) {
-      currentNodeRef.current = currentNodeRef.current.prev;
-    } else if (loopMode === 'all' && listRef.current.tail) {
-      currentNodeRef.current = listRef.current.tail;
-    } else return;
-
-    const song = currentNodeRef.current!.data;
-    setCurrentSong(song);
-    updateThemeWithArt(song.coverArt);
-    if (audioRef.current) audioRef.current.src = song.objectUrl;
-    playSong();
+    if(audioRef.current) {
+      audioRef.current.src = song.objectUrl;
+      try { 
+        await audioRef.current.play(); 
+        setIsPlaying(true); 
+        initAudioContext();
+      } catch(e) { setIsPlaying(false); }
+    }
   };
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const handleLoadedMetadata = () => setDuration(audio.duration);
-    const handleEnded = () => playNext();
+  const initAudioContext = () => {
+    if (analyserRef.current || !audioRef.current) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const src = ctx.createMediaElementSource(audioRef.current);
+      const ana = ctx.createAnalyser();
+      ana.fftSize = 256;
+      src.connect(ana);
+      ana.connect(ctx.destination);
+      analyserRef.current = ana;
+      animateBeat();
+    } catch (e) { console.error("Web Audio fail:", e); }
+  };
 
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('ended', handleEnded);
-
-    return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('ended', handleEnded);
+  const animateBeat = () => {
+    if (!analyserRef.current) return;
+    const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+    const render = () => {
+      if (!analyserRef.current) return;
+      analyserRef.current.getByteFrequencyData(data);
+      // Analizar bajos (primeras frecuencias)
+      const bass = data.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
+      const scale = 1 + (bass / 255) * 0.15;
+      const glow = (bass / 255) * 40;
+      document.documentElement.style.setProperty('--beat-scale', scale.toString());
+      document.documentElement.style.setProperty('--beat-glow', `${glow}px`);
+      requestAnimationFrame(render);
     };
-  }, [loopMode, currentSong]);
-
-  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioRef.current) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    audioRef.current.currentTime = pos * duration;
+    render();
   };
 
-  const formatTime = (time: number) => {
-    if (isNaN(time)) return "0:00";
-    const m = Math.floor(time / 60);
-    const s = Math.floor(time % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
+  const handleNext = () => {
+    if(!currentNodeRef.current) return;
+    if(isShuffle) { playSong(songs[Math.floor(Math.random()*songs.length)]); }
+    else if(currentNodeRef.current.next) { playSong(currentNodeRef.current.next.data); }
+    else if(isRepeat && listRef.current.head) { playSong(listRef.current.head.data); }
+    else { setIsPlaying(false); }
   };
 
-  const selectSong = (song: Song) => {
-    let current = listRef.current.head;
-    while (current) {
-      if (current.data.id === song.id) {
-        currentNodeRef.current = current;
-        setCurrentSong(song);
-        updateThemeWithArt(song.coverArt);
-        if (audioRef.current) audioRef.current.src = song.objectUrl;
-        playSong();
-        break;
+  const handlePrev = () => {
+    if(!currentNodeRef.current) return;
+    if(audioRef.current && audioRef.current.currentTime > 3) { audioRef.current.currentTime = 0; return; }
+    if(currentNodeRef.current.prev) playSong(currentNodeRef.current.prev.data);
+  };
+
+  const toggleFav = (e: React.MouseEvent, song: Song) => {
+    e.stopPropagation();
+    const up = songs.map(s => s.id === song.id ? {...s, isFavorite: !s.isFavorite} : s);
+    setSongs(up);
+    if(currentSong?.id === song.id) setCurrentSong({...currentSong, isFavorite: !currentSong.isFavorite});
+  };
+
+  const createPlaylist = () => {
+    console.log("Intentando crear playlist con nombre:", newPlName);
+    if(!newPlName.trim()) {
+      alert("Por favor, escribe un nombre para la playlist.");
+      return;
+    }
+    const newPl = { id: Math.random().toString(36).substring(2, 9), name: newPlName, songIds: [] };
+    const updatedPlaylists = [...playlists, newPl];
+    setPlaylists(updatedPlaylists);
+    setNewPlName('');
+    alert(`¡Playlist "${newPlName}" creada con éxito!`);
+  };
+
+  const addSongToPlaylist = (plId: string, songId: string) => {
+    const updated = playlists.map(pl => {
+      if(pl.id === plId && !pl.songIds.includes(songId)) {
+        return { ...pl, songIds: [...pl.songIds, songId] };
       }
-      current = current.next;
+      return pl;
+    });
+    setPlaylists(updated);
+    setTargetSong(null);
+    setShowPlModal(false);
+    alert("¡Canción añadida!");
+  };
+
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+
+  const removeSong = (e: React.MouseEvent, song: Song) => {
+    e.stopPropagation();
+    if (window.confirm(`¿Estás seguro de que quieres eliminar "${song.name}"?`)) {
+      // Remove from state
+      const updated = songs.filter(s => s.id !== song.id);
+      setSongs(updated);
+      
+      // Remove from DLL
+      let node = listRef.current.head;
+      while (node) {
+        if (node.data.id === song.id) {
+          listRef.current.removeNode(node);
+          break;
+        }
+        node = node.next;
+      }
+      
+      // Stop playback if it's the current song
+      if (currentSong?.id === song.id) {
+        setCurrentSong(null);
+        if (audioRef.current) {
+          audioRef.current.pause();
+          setIsPlaying(false);
+        }
+      }
     }
   };
 
-  const handleNoteChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const text = e.target.value;
-    if (currentNodeRef.current && currentSong) {
-      currentNodeRef.current.data.note = text;
-      setCurrentSong({...currentSong, note: text});
-      setPlaylistArray(listRef.current.toArray()); 
+  const filtered = (() => {
+    let base = songs;
+    if (activePlId) {
+      const pl = playlists.find(p => p.id === activePlId);
+      if (pl) base = songs.filter(s => pl.songIds.includes(s.id));
+    } else if (favoritesOnly) {
+      base = songs.filter(s => s.isFavorite);
     }
-  };
+    return base.filter(s => 
+      s.name.toLowerCase().includes(query.toLowerCase()) || 
+      s.artist.toLowerCase().includes(query.toLowerCase())
+    );
+  })();
 
   return (
-    <>
-      <audio ref={audioRef} crossOrigin="anonymous" style={{ display: 'none' }} />
-      <div className="global-art-blur" style={{ backgroundImage: currentSong?.coverArt ? `url(${currentSong.coverArt})` : 'none' }}></div>
-      <canvas ref={bgCanvasRef} className="bg-visualizer-canvas" />
-      
-      <div className="app-container">
-        <button className="theme-toggle-btn" onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}>
-          {theme === 'dark' ? <Sun size={24} /> : <Moon size={24} />}
-        </button>
+    <div className={`app-container ${showRightPanel ? 'has-panel' : ''}`}>
+      <div className="ambient-bg"><div className="aura"></div></div>
+      <audio 
+        ref={audioRef}
+        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+        onEnded={handleNext}
+      />
 
-        <div className="glass-panel main-player">
-          <div className="top-section">
-            <div className="cover-art-container">
-              {currentSong?.coverArt ? (
-                <img src={currentSong.coverArt} alt="Cover" className={`cover-art-img ${isPlaying ? 'spinning' : ''}`} crossOrigin="anonymous"/>
-              ) : (
-                <Disc size={90} style={{ opacity: 0.1 }} />
-              )}
-            </div>
-            
-            <div className="now-playing">
-              <h2>{currentSong ? currentSong.name : "NovoBeat Core"}</h2>
-              <p>{currentSong ? currentSong.artist : "Listo para tu música. Arrastra archivos o haz clic abajo."}</p>
-              {currentSong && <div className="meta-info">Reproducciones Totales: {currentSong.playCount}</div>}
-            </div>
-          </div>
-
-          <div className="visualizer-container">
-            <canvas ref={canvasRef} className="visualizer-canvas"></canvas>
-          </div>
-
-          <div style={{ width: '100%', marginTop: 'auto' }}>
-            <div className="progress-container">
-              <span className="time-text">{formatTime(currentTime)}</span>
-              <div className="progress-bar-wrapper" onClick={seek}>
-                <div className="progress-bar-fill" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
-              </div>
-              <span className="time-text">{formatTime(duration)}</span>
-            </div>
-
-            <div className="controls-container">
-              <button className="control-btn" onClick={() => setLoopMode(v => v === 'all' ? 'one' : v === 'one' ? 'none' : 'all')}>
-                {loopMode === 'one' ? <Repeat1 size={24} className="icon-active" /> : <Repeat size={24} className={loopMode === 'all' ? 'icon-active' : ''} />}
-              </button>
-              
-              <button className="control-btn" onClick={playPrev} disabled={!currentNodeRef.current?.prev && loopMode !== 'all'}>
-                <SkipBack size={32} />
-              </button>
-              
-              <button className="play-btn" onClick={togglePlay}>
-                {isPlaying ? <Pause size={46} /> : <Play size={46} style={{marginLeft: '6px'}} />}
-              </button>
-              
-              <button className="control-btn" onClick={playNext} disabled={!currentNodeRef.current?.next && loopMode !== 'all'}>
-                <SkipForward size={32} />
-              </button>
-
-              <button className="control-btn" onClick={() => setVolume(v => v > 0 ? 0 : 1)}>
-                {volume > 0 ? <Volume2 size={24} /> : <VolumeX size={24} />}
-              </button>
-            </div>
-
-            <div className="utilities-row">
-              <div className="utility-card">
-                 <span className="utility-title"><Network size={16}/> Eco 3D (Reverb)</span>
-                 <button 
-                  className={`fx-btn ${stadiumMode ? 'active' : ''}`}
-                  onClick={() => {initAudio(); setStadiumMode(!stadiumMode);}}
-                 >
-                   {stadiumMode ? 'Activado' : 'Apagado'}
-                 </button>
-              </div>
-
-              <div className="utility-card">
-                 <span className="utility-title"><Waves size={16}/> Modo Submarino</span>
-                 <button 
-                  className={`fx-btn ${underwaterMode ? 'active' : ''}`}
-                  onClick={() => {initAudio(); setUnderwaterMode(!underwaterMode);}}
-                 >
-                   {underwaterMode ? 'Activado' : 'Apagado'}
-                 </button>
-              </div>
-
-              <div className="utility-card">
-                 <span className="utility-title"><Rocket size={16}/> Filtro Nightcore</span>
-                 <button 
-                  className={`fx-btn ${nightcoreMode ? 'active' : ''}`}
-                  onClick={() => {initAudio(); setNightcoreMode(!nightcoreMode);}}
-                 >
-                   {nightcoreMode ? 'Activado' : 'Apagado'}
-                 </button>
-              </div>
-
-              <div className="utility-card">
-                 <span className="utility-title"><ArrowRightLeft size={16}/>  Espacializador (Izq/Der)</span>
-                 <input type="range" min="-1" max="1" step="0.05" value={pannerValue} onChange={(e) => {initAudio(); setPannerValue(parseFloat(e.target.value));}} />
-                 <div style={{display:'flex', justifyContent:'space-between', fontSize:'10px', marginTop:'5px', color:'var(--text-secondary)'}}><span>IZQ</span><span>DER</span></div>
-              </div>
-
-              <div className="utility-card">
-                 <span className="utility-title"><Gauge size={16}/> Velocidad Personalizada</span>
-                 <div style={{ display: 'flex', gap: '20px', alignItems: 'center', height: '100%' }}>
-                   <input type="range" min="0.5" max="2" step="0.1" value={playbackRate} onChange={(e) => {setNightcoreMode(false); setPlaybackRate(parseFloat(e.target.value));}} disabled={nightcoreMode} />
-                   <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--text-primary)' }}>{nightcoreMode ? '1.35' : playbackRate}x</span>
-                 </div>
-              </div>
-            </div>
-
-            <div className="dll-debugger-panel">
-               <span className="dll-title"><Radio size={16} /> Mapa de Nodos (Lista Doble Enlazada)</span>
-               <div className="dll-map-container">
-                 {playlistArray.length === 0 ? <span style={{fontSize:'12px', color:'var(--text-secondary)'}}>Estructura de datos vacía. Inserta canciones.</span> : null}
-                 {playlistArray.map((song, i) => (
-                   <div key={song.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                     <div className={`dll-node-box ${song.id === currentSong?.id ? 'active' : ''}`}>
-                       <strong style={{marginBottom:'2px'}}>{i === 0 ? '[HEAD]' : i === playlistArray.length -1 ? '[TAIL]' : 'NODO'}</strong>
-                       <span style={{maxWidth:'80px', overflow:'hidden', textOverflow:'ellipsis'}}>{song.name}</span>
-                     </div>
-                     {i < playlistArray.length - 1 && (
-                       <div className="dll-pointers">
-                         <span style={{fontSize:'10px'}}>sig</span>
-                         <ArrowRightLeft size={14} />
-                         <span style={{fontSize:'10px'}}>ant</span>
-                       </div>
-                     )}
-                   </div>
-                 ))}
-               </div>
+      <aside className="sidebar">
+        <div className="brand"><Radio size={28}/> Symphony</div>
+        <nav style={{ display:'flex', flexDirection:'column', gap: 10 }}>
+          <div className={`nav-item ${view==='home' && !favoritesOnly && !activePlId?'active':''}`} onClick={()=>{setView('home'); setFavoritesOnly(false); setActivePlId(null); setQuery('');}}><Home size={20}/> Inicio</div>
+          <div className={`nav-item ${favoritesOnly?'active':''}`} onClick={()=>{setView('home'); setFavoritesOnly(true); setActivePlId(null); setQuery('');}}><Heart size={20} fill={favoritesOnly?'white':'none'}/> Favoritos</div>
+          <div className={`nav-item ${view==='import'?'active':''}`} onClick={()=>{setView('import'); setFavoritesOnly(false); setActivePlId(null);}}><UploadCloud size={20}/> Importar</div>
+          <div className={`nav-item ${view==='library'?'active':''}`} onClick={()=>{setView('library'); setFavoritesOnly(false); setActivePlId(null);}}><Library size={20}/> Biblioteca</div>
+        </nav>
+        <div style={{ flex:1 }}></div>
+        {currentSong && (
+          <div style={{ marginBottom: 20, display:'flex', gap: 12, alignItems:'center', background:'var(--border-light)', padding: 10, borderRadius: 15 }}>
+            <img src={getCoverUrl(currentSong.coverArt)} style={{ width: 45, height: 45, borderRadius: 10, objectFit:'cover' }} alt=""/>
+            <div style={{ overflow:'hidden' }}>
+              <strong style={{ display:'block', fontSize:'0.85rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{currentSong.name}</strong>
+              <span style={{ fontSize:'0.75rem', opacity:0.6 }}>{currentSong.artist}</span>
             </div>
           </div>
+        )}
+        <div className="nav-item" onClick={()=>setTheme(theme==='dark'?'light':'dark')}>
+          {theme==='dark'?<Moon size={18}/>:<Sun size={18}/>} Modo {theme==='dark'?'Oscuro':'Claro'}
         </div>
+      </aside>
 
-        <div className="glass-panel notes-panel">
-           <span className="dll-title"><BookOpen size={20} /> Base de Datos de Notas</span>
-           <p style={{fontSize:'0.9rem', color:'var(--text-secondary)'}}>
-             Payload del Nodo: Datos ligados de manera estricta a la memoria de la pista elegida. Puedes escribir aquí contexto adicional para la canción:
-           </p>
-           <textarea 
-             className="notebook-area" 
-             placeholder={currentSong ? "Escribe texto detallado para acoplarlo al nodo sonoro matemáticamente..." : "Inserta audios para habilitar la memoria del nodo."} 
-             value={currentSong?.note || ''} 
-             onChange={handleNoteChange}
-             disabled={!currentSong}
-           />
-        </div>
-
-        <div className="glass-panel playlist-panel">
-          <div className="top-bar-playlist">
-            <h3>Nodos / Playlist</h3>
+      <main className="main-content">
+        <header>
+          <div className="search-input">
+            <Search size={20} opacity={0.4}/>
+            <input type="text" placeholder="¿Qué quieres escuchar hoy?" value={query} onChange={e=>setQuery(e.target.value)}/>
           </div>
-          
-          <div style={{ position: 'relative' }}>
-             <Search size={22} style={{position: 'absolute', top: '15px', left: '16px', color:'var(--text-secondary)'}} />
-             <input 
-                type="text" 
-                className="search-bar" 
-                placeholder="Buscador aproximado de nodos..." 
-                style={{ paddingLeft: '50px' }}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-             />
-          </div>
+        </header>
 
-          <div className="playlist-items">
-            {filteredPlaylist.map((song) => {
-              const nodeIndex = playlistArray.findIndex(s => s.id === song.id); 
-              return (
-              <div 
-                key={song.id} 
-                className={`playlist-item ${currentSong?.id === song.id ? 'active' : ''}`}
-                onClick={() => selectSong(song)}
-              >
-                {song.coverArt ? (
-                  <img src={song.coverArt} className="item-art" alt="cover"/>
-                ) : (
-                  <div className="item-art" style={{ background: 'var(--slider-track)', display: 'flex', justifyContent:'center', alignItems:'center' }}>
-                     <Disc size={24} opacity={0.3} color="var(--text-secondary)"/>
+        <div className="view-content">
+          {view === 'home' && (
+            <>
+              <h1 className="title-xl">{favoritesOnly ? 'Tus Canciones Favoritas' : 'Tu Colección'}</h1>
+              <div className="grid-layout">
+                {filtered.map(s => (
+                  <div key={s.id} className="card-elite" onClick={()=>playSong(s)}>
+                    <div className="card-art">
+                      {s.coverArt ? <img src={getCoverUrl(s.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1}}><Music size={60}/></div>}
+                      <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(e)=>toggleFav(e, s)}>
+                        <Heart size={20} fill={s.isFavorite?'currentColor':'none'}/>
+                      </button>
+                      <button className="btn-p" style={{ position:'absolute', top:10, left:40, color: 'white', opacity:0.8 }} onClick={(e)=>{e.stopPropagation(); setTargetSong(s); setShowPlModal(true);}}>
+                        <ListPlus size={18}/>
+                      </button>
+                      <button className="btn-p" style={{ position:'absolute', top:10, left:10, color: 'white', opacity:0.6 }} onClick={(e)=>removeSong(e, s)}>
+                        <Trash2 size={18}/>
+                      </button>
+                      <div className="play-badge"><Play size={24} fill="white"/></div>
+                    </div>
+                    <strong className="card-title">{s.name}</strong>
+                    <span className="card-artist">{s.artist}</span>
                   </div>
-                )}
-                
-                <div className="song-info">
-                  <span className="song-name">{song.name}</span>
-                  <span className="song-artist">{song.artist} {song.note ? '📝' : ''}</span>
-                </div>
-                <button className="del-btn" onClick={(e) => { 
-                  e.stopPropagation(); 
-                  listRef.current.removeAt(nodeIndex);
-                  setPlaylistArray(listRef.current.toArray());
-                }}>
-                  <Trash2 size={24} color="var(--text-secondary)"/>
-                </button>
+                ))}
               </div>
-            )})}
-          </div>
+            </>
+          )}
 
-          <div style={{ display: 'flex', gap: '10px', marginTop: 'auto', marginBottom: '10px' }}>
-            <select 
-              value={insertMode} 
-              onChange={(e) => setInsertMode(e.target.value as any)}
-              style={{ flex: 1, padding: '10px', borderRadius: '15px', background: 'var(--glass-bg)', color: 'var(--text-primary)', border: '1px solid var(--glass-border)', outline: 'none' }}
-            >
-              <option value="end">Opción Inserción: Al Final</option>
-              <option value="start">Opción Inserción: Al Inicio</option>
-              <option value="index">Opción Inserción: Custom Index</option>
-            </select>
-            {insertMode === 'index' && (
-              <input 
-                type="number" 
-                min="0" 
-                max={playlistArray.length}
-                value={insertIndex} 
-                onChange={(e) => setInsertIndex(parseInt(e.target.value) || 0)}
-                style={{ width: '80px', padding: '10px', borderRadius: '15px', background: 'var(--glass-bg)', color: 'var(--text-primary)', border: '1px solid var(--glass-border)', outline: 'none' }}
-              />
-            )}
-          </div>
+          {view === 'import' && (
+            <div style={{ height:'60vh', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <div style={{ textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap: 20 }}>
+                <div style={{ width:120, height:120, background:'var(--primary-glow)', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', color:'rgb(var(--primary))' }}><UploadCloud size={60}/></div>
+                <h2 style={{fontSize:'2.5rem', fontWeight:900}}>Importar Música</h2>
+                <p style={{color:'var(--text-muted)'}}>Sube tus archivos MP3 para empezar la experiencia Elite.</p>
+                <button style={{ background:'rgb(var(--primary))', color:'white', border:'none', padding:'15px 40px', borderRadius: 12, fontWeight:700, cursor:'pointer' }} onClick={()=>document.getElementById('fup')?.click()}>Seleccionar Archivos</button>
+                <input type="file" id="fup" multiple accept="audio/*" style={{display:'none'}} onChange={handleImport}/>
+              </div>
+            </div>
+          )}
 
-          <div 
-            className="drop-zone"
-            onClick={() => {
-              const input = document.getElementById('audio-file-input') as HTMLInputElement;
-              if (input) input.click();
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => { e.preventDefault(); processFiles(e.dataTransfer.files); }}
-            style={{cursor: 'pointer'}}
-          >
-            <input 
-              id="audio-file-input"
-              type="file" 
-              multiple 
-              accept="audio/*" 
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  processFiles(e.target.files);
-                }
-                e.target.value = '';
-              }}
-            />
-            <Plus size={36} style={{ margin: '0 auto 10px auto', display: 'block', color: 'var(--text-primary)' }}/>
-            Carga tus Pistas Múltiples (MP3/FLAC/WAV)
-          </div>
+          {view === 'library' && (
+            <div className="library-view">
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'2rem' }}>
+                <h1 className="title-xl" style={{margin:0}}>
+                  {activePlId ? `Playlist: ${playlists.find(p=>p.id===activePlId)?.name}` : 'Biblioteca Elite'}
+                </h1>
+                {!activePlId ? (
+                  <div style={{ display:'flex', gap: 10 }}>
+                    <input 
+                      type="text" 
+                      placeholder="Nombre de Playlist..." 
+                      value={newPlName} 
+                      onChange={e=>setNewPlName(e.target.value)}
+                      style={{ background:'var(--border-light)', border:'none', borderRadius:10, padding:'0 15px', color:'var(--text-main)', fontSize:'0.9rem' }}
+                    />
+                    <button className="btn-p" style={{ background:'rgb(var(--primary))', padding:'10px 20px', borderRadius:10, fontWeight:700 }} onClick={createPlaylist}>
+                      <Plus size={18} style={{marginRight:5}}/> Crear Playlist
+                    </button>
+                  </div>
+                ) : (
+                  <button className="btn-p" style={{ background:'var(--border-light)', padding:'10px 20px', borderRadius:10 }} onClick={()=>setActivePlId(null)}>
+                    <SkipBack size={18} style={{marginRight:5}}/> Volver a Biblioteca
+                  </button>
+                )}
+              </div>
+              
+              {!activePlId && (
+                <div style={{ marginBottom: '3rem' }}>
+                  <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '1.5rem', opacity: 0.8 }}>Escuchas Recientes & Favoritos</h2>
+                  <div className="grid-layout">
+                    <div 
+                      className={`card-elite ${favoritesOnly ? 'active-filter' : ''}`} 
+                      style={{ background: favoritesOnly ? 'rgb(var(--primary))' : 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', color: 'white' }}
+                      onClick={() => { setFavoritesOnly(!favoritesOnly); setQuery(''); }}
+                    >
+                      <div className="card-art" style={{ background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Heart size={60} fill="white" />
+                      </div>
+                      <strong className="card-title">Tus Favoritos</strong>
+                      <span className="card-artist" style={{ color: 'rgba(255,255,255,0.7)' }}>
+                        {songs.filter(s => s.isFavorite).length} canciones
+                      </span>
+                    </div>
 
+                    {/* Playlists creadas por el usuario */}
+                    {playlists.filter(p => p.id !== 'favs').map(pl => (
+                      <div key={pl.id} className="card-elite" style={{ background: 'var(--border-light)' }} onClick={()=>setActivePlId(pl.id)}>
+                        <div className="card-art" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.2 }}>
+                          <Music size={60} />
+                        </div>
+                        <strong className="card-title">{pl.name}</strong>
+                        <span className="card-artist">{pl.songIds.length} canciones</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Lista de Canciones Filtrada (Por Biblioteca o Playlist activa) */}
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '1.5rem', opacity: 0.8 }}>
+                {activePlId ? 'Canciones en esta lista' : 'Todas las pistas'}
+              </h2>
+              <div className="grid-layout">
+                {filtered.map(s => (
+                  <div key={s.id} className="card-elite" onClick={()=>playSong(s)}>
+                    <div className="card-art">
+                      {s.coverArt ? <img src={getCoverUrl(s.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', opacity:0.1}}><Music size={60}/></div>}
+                      <button className="btn-p" style={{ position:'absolute', top:10, right:10, color: s.isFavorite?'#f43f5e':'white', opacity:1 }} onClick={(e)=>toggleFav(e, s)}>
+                        <Heart size={20} fill={s.isFavorite?'currentColor':'none'}/>
+                      </button>
+                      <button className="btn-p" style={{ position:'absolute', top:10, left:40, color: 'white', opacity:0.8 }} onClick={(e)=>{e.stopPropagation(); setTargetSong(s); setShowPlModal(true);}}>
+                        <ListPlus size={18}/>
+                      </button>
+                      <button className="btn-p" style={{ position:'absolute', top:10, left:10, color: 'white', opacity:0.6 }} onClick={(e)=>removeSong(e, s)}>
+                        <Trash2 size={18}/>
+                      </button>
+                      <div className="play-badge"><Play size={24} fill="white"/></div>
+                    </div>
+                    <strong className="card-title">{s.name}</strong>
+                    <span className="card-artist">{s.artist}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      </div>
-    </>
+      </main>
+
+      {showRightPanel && currentSong && (
+        <aside className="panel-right">
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 30 }}>
+            <span style={{ fontSize:'0.75rem', fontWeight:800, opacity:0.5, letterSpacing:'0.1em' }}>REPRODUCIENDO</span>
+            <X size={20} style={{cursor:'pointer'}} onClick={()=>setShowRightPanel(false)}/>
+          </div>
+          <div className="art-big" style={{ transform: 'scale(var(--beat-scale, 1))', boxShadow: '0 0 var(--beat-glow, 0px) rgba(var(--theme-dominant), 0.5)', transition: 'transform 0.05s linear' }}>
+            {currentSong.coverArt ? <img src={getCoverUrl(currentSong.coverArt)} alt=""/> : <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', background:'var(--border-light)'}}><Disc size={120} opacity={0.1}/></div>}
+          </div>
+          <h2 style={{ fontSize:'1.8rem', fontWeight:900, marginBottom: 5 }}>{currentSong.name}</h2>
+          <p style={{ fontSize:'1.2rem', color:'var(--text-muted)', fontWeight:500, marginBottom: 20 }}>{currentSong.artist}</p>
+          
+          <button 
+            className="btn-p" 
+            style={{ width:'100%', background:'var(--border-light)', padding:'15px', borderRadius:15, display:'flex', alignItems:'center', justifyContent:'center', gap:10, fontWeight:700 }}
+            onClick={() => { setTargetSong(currentSong); setShowPlModal(true); }}
+          >
+            <ListPlus size={20}/> Añadir a Playlist
+          </button>
+        </aside>
+      )}
+
+      <footer className="footer-master">
+        <div className="np-box">
+          <div className="np-img">
+            {currentSong?.coverArt ? <img src={getCoverUrl(currentSong.coverArt)} className={isPlaying?'spinning':''} alt=""/> : <Music size={24}/>}
+          </div>
+          <div className="np-info">
+            <strong>{currentSong?.name || "Selecciona una pista"}</strong>
+            <span style={{fontSize:'0.85rem', opacity:0.6}}>{currentSong?.artist || "Symphony Elite"}</span>
+          </div>
+        </div>
+
+        <div className="player-core">
+          <div className="ctrl-row">
+            <Shuffle size={18} className={`btn-p ${isShuffle?'active':''}`} onClick={()=>setIsShuffle(!isShuffle)}/>
+            <SkipBack size={24} className="btn-p" onClick={handlePrev}/>
+            <div className="btn-p play-main" onClick={()=>{ if(audioRef.current?.paused) audioRef.current.play(); else audioRef.current?.pause(); setIsPlaying(!audioRef.current?.paused); }}>
+              {isPlaying ? <Pause size={28} fill="currentColor"/> : <Play size={28} fill="currentColor" style={{marginLeft:3}}/>}
+            </div>
+            <button className="btn-p" style={{background:'none', border:'none'}} onClick={handleNext}><SkipForward size={24}/></button>
+            <Repeat size={18} className={`btn-p ${isRepeat?'active':''}`} onClick={()=>setIsRepeat(!isRepeat)}/>
+          </div>
+          <div className="seek-wrap">
+            <span>{formatTime(currentTime)}</span>
+            <div className="bar-total" onClick={e => { if(!audioRef.current) return; const r=e.currentTarget.getBoundingClientRect(); audioRef.current.currentTime = ((e.clientX-r.left)/r.width)*duration; }}>
+              <div className="bar-fill" style={{ width: `${(currentTime/duration)*100 || 0}%` }}></div>
+            </div>
+            <span>{formatTime(duration)}</span>
+          </div>
+        </div>
+
+        <div className="actions-box">
+          <Maximize2 className="btn-p" size={18} onClick={()=>setShowRightPanel(p=>!p)}/>
+          <div style={{display:'flex', alignItems:'center', gap:10}}>
+            <Volume2 size={20} opacity={0.5}/>
+            <input type="range" min="0" max="1" step="0.01" value={volume} onChange={e => {setVolume(parseFloat(e.target.value)); if(audioRef.current) audioRef.current.volume=parseFloat(e.target.value);}} className="vol-control"/>
+          </div>
+        </div>
+      </footer>
+
+      {/* MODAL DE SELECCIÓN DE PLAYLIST */}
+      {showPlModal && targetSong && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.8)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(10px)' }}>
+          <div style={{ background:'var(--card-bg)', border:'1px solid var(--border-light)', padding:30, borderRadius:25, width:350, boxShadow:'0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+              <h3 style={{fontSize:'1.2rem', fontWeight:800}}>Añadir a Playlist</h3>
+              <X size={24} style={{cursor:'pointer'}} onClick={()=>setShowPlModal(false)}/>
+            </div>
+            <p style={{fontSize:'0.9rem', opacity:0.6, marginBottom:20}}>Selecciona el destino para: <br/><strong>{targetSong.name}</strong></p>
+            <div style={{ display:'flex', flexDirection:'column', gap:10, maxHeight:300, overflow:'auto' }}>
+              {playlists.map(pl => (
+                <div 
+                  key={pl.id} 
+                  onClick={()=>addSongToPlaylist(pl.id, targetSong.id)}
+                  style={{ padding:15, background:'var(--border-light)', borderRadius:12, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                >
+                  <strong>{pl.name}</strong>
+                  <div style={{fontSize:'0.8rem', opacity:0.5}}>{pl.songIds.length} pistas</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

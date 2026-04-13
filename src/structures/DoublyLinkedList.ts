@@ -4,12 +4,13 @@ export interface Song {
   artist: string;
   album?: string;
   year?: string;
-  coverArt?: string | null;
+  coverArt?: string | Blob | null;
   file?: File;
   objectUrl: string;
   playCount: number;
   addedAt: number;
   note?: string;
+  isFavorite?: boolean;
 }
 
 export class Node<T> {
@@ -27,7 +28,6 @@ export class DoublyLinkedList<T> {
   public tail: Node<T> | null = null;
   public size: number = 0;
 
-  // Allows adding a song to the end (default append method)
   public append(data: T): void {
     const newNode = new Node(data);
     if (!this.head) {
@@ -43,7 +43,6 @@ export class DoublyLinkedList<T> {
     this.size++;
   }
 
-  // Allows adding a song to the beginning of the list
   public prepend(data: T): void {
     const newNode = new Node(data);
     if (!this.head) {
@@ -57,7 +56,6 @@ export class DoublyLinkedList<T> {
     this.size++;
   }
 
-  // Allows adding a song at any specific index position
   public insertAt(data: T, index: number): void {
     if (index < 0 || index > this.size) throw new Error("Index out of bounds");
     if (index === 0) return this.prepend(data);
@@ -66,7 +64,6 @@ export class DoublyLinkedList<T> {
     const newNode = new Node(data);
     let current = this.head;
     for (let i = 0; i < index; i++) {
-        // Find the node that will be replaced at 'index'
       if (current) current = current.next;
     }
 
@@ -79,7 +76,6 @@ export class DoublyLinkedList<T> {
     }
   }
 
-  // Allows removing a song from the list by its index
   public removeAt(index: number): T | null {
     if (index < 0 || index >= this.size || !this.head) return null;
 
@@ -112,7 +108,7 @@ export class DoublyLinkedList<T> {
       if (node === this.head) {
           this.head = node.next;
           if (this.head) this.head.prev = null;
-          else this.tail = null; // List became empty
+          else this.tail = null;
       } else if (node === this.tail) {
           this.tail = node.prev;
           if (this.tail) this.tail.next = null;
