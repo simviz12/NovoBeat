@@ -3,8 +3,8 @@ import {
   Play, Pause, SkipForward, SkipBack, 
   Volume2, Search, Disc, Radio, Sun, Moon, 
   Heart, UploadCloud, Home, Library, Plus, 
-  FolderPlus, X, Shuffle, Repeat, Maximize2, 
-  Music, Trash2, ListPlus, CheckCircle
+  X, Shuffle, Repeat, Maximize2, 
+  Music, Trash2, ListPlus
 } from 'lucide-react';
 import { DoublyLinkedList, type Song, Node as DLLNode } from './structures/DoublyLinkedList';
 import { get, set } from 'idb-keyval';
@@ -34,7 +34,7 @@ function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
   const [view, setView] = useState<'home' | 'import' | 'library'>('home');
   const [showRightPanel, setShowRightPanel] = useState(true);
-  const [showMsg, setShowMsg] = useState(false);
+
   const [query, setQuery] = useState('');
 
   // Music State
@@ -60,7 +60,7 @@ function App() {
   const currentNodeRef = useRef<DLLNode<Song> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const [beat, setBeat] = useState(1);
+
 
   // Load Data
   useEffect(() => {
